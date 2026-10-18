@@ -1,0 +1,45 @@
+(function(){
+'use strict';
+const input=document.getElementById('legacyWordFile'), btn=document.getElementById('parseLegacyWord'), view=document.getElementById('legacyWordPreview');
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const clean=s=>String(s||'').replace(/[\u3000\s]+/g,' ').trim();
+const siteKey=s=>clean(s).replace(/[\s\[\]［］（）()・－−ー]/g,'').toLowerCase();
+let pending=[];
+const NS='http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+const els=(parent,tag)=>Array.from(parent.childNodes).filter(n=>n.nodeType===1&&n.localName===tag);
+function deepText(node){return Array.from(node.getElementsByTagNameNS(NS,'t')).map(x=>x.textContent).join('');}
+function timeNum(s){const m=/^(\d{1,2}):(\d{2})$/.exec(s.trim());if(!m)return NaN;const v=Number(m[1])*60+Number(m[2]);return Number(m[2])<60&&v<=1800?v:NaN}
+function decodeWorkLine(raw){let str=String(raw||'').replace(/[\u3000\t\r\n]+/g,' ').trim();const tm=str.match(/(\d{1,2}:\d{2})\s*[~～〜－-]\s*(\d{1,2}:\d{2})\s*$/);
+if(!tm)return {start:null,end:null,workers:[],error:'作業時間を読み取れません',head:str};
+let head=str.slice(0,tm.index).replace(/\s+/g,'').trim();const countMatch=head.match(/([0-9０-９一二三四五六七八九]+)人$/);const count=countMatch?Number(countMatch[1].replace(/[０-９]/g,c=>String(c.charCodeAt(0)-65296)).replace(/[一二三四五六七八九]/g,c=>String('一二三四五六七八九'.indexOf(c)+1))):null;
+if(countMatch)head=head.slice(0,countMatch.index);const workers=head.split(/[、,，・\/／]/).map(x=>x.trim()).filter(Boolean);
+let st=timeNum(tm[1]),en=timeNum(tm[2]);if(Number.isFinite(st)&&Number.isFinite(en)&&en<=st&&en<1440)en+=1440;
+const errors=[];if(!Number.isFinite(st)||!Number.isFinite(en)||en<=st)errors.push('時刻の確認が必要');if(count!==null&&count!==workers.length)errors.push('人数が作業員名と一致しません');if(!workers.length)errors.push('作業員が不明');return{start:st,end:en,workers,error:errors.join('／'),head,count};}
+function extract(doc){const body=doc.getElementsByTagNameNS(NS,'body')[0];if(!body)throw Error('Word本文がありません');let currentSite='',seenTables=0;const result=[];for(const node of Array.from(body.childNodes)){if(node.nodeType!==1)continue;if(node.localName==='p'){
+const txt=clean(deepText(node));if(/^物件名\s*[:：]/.test(txt))currentSite=txt.replace(/^物件名\s*[:：]\s*/,'').trim();continue}
+if(node.localName!=='tbl')continue;seenTables++;
+const rows=els(node,'tr').map(tr=>els(tr,'tc').map(tc=>clean(deepText(tc))));
+const hdr=rows[0]||[];const pi=hdr.findIndex(t=>t==='担当者');const person=pi>=0?hdr[pi+1]||'':'';
+for(let i=2;i<rows.length-1;i+=3){const r=rows[i]||[],workerRow=rows[i+1]||[];const yr=Number(r[0]),mo=Number(r[1]),dy=Number(r[2]);const work=r.slice(4).find(t=>t)||'';
+if(!yr&&!mo&&!dy&&!work)continue;
+const date=yr>0&&mo>=1&&mo<=12&&dy>=1&&dy<=31?`${yr+2018}-${String(mo).padStart(2,'0')}-${String(dy).padStart(2,'0')}`:'';
+const line=workerRow.slice(4).find(t=>t)||'';const parsed=decodeWorkLine(line);
+result.push({date,site:currentSite,person,work,start:parsed.start,end:parsed.end,workers:parsed.workers,breakMin:null,issues:[...(!date?['日付を確認']:[]),...(!currentSite?['現場名を確認']:[]),...(!work?['作業内容を確認']:[]),...(parsed.error?[parsed.error]:[])]});
+}}
+return {result,seenTables};}
+function sig(r){return [siteKey(r.site),r.date,Number(r.start),Number(r.end),clean(r.work)].join('|')}
+function existingSig(){return new Set(db.records.map(sig))}
+function inputText(index,key,label,v){return `<label>${label}<input class="legacy-input" data-index="${index}" data-field="${key}" value="${esc(v)}"></label>`}
+function row(r,i,duplicates){const duplicated=duplicates.has(sig(r));let caution=r.issues.length?`<p class="alert">${esc(r.issues.join('、'))}</p>`:'';
+return `<details class="item" ${r.issues.length?'open':''}><summary><strong>${esc(r.date||'日付不明')} ／ ${esc(r.site||'現場不明')}</strong><div class="muted">${esc(r.work||'作業内容なし')} ／ ${Number.isFinite(r.start)?fmt(r.start):'?'}〜${Number.isFinite(r.end)?fmt(r.end):'?'} ${duplicated?'（既存データと一致）':''}</div></summary>${caution}<label><input type="checkbox" data-use="${i}" ${duplicated?'':'checked'} style="width:auto"> この記録を取り込む</label>${inputText(i,'date','日付（YYYY-MM-DD）',r.date)}<label>現場名<input list="legacySiteList" class="legacy-input" data-index="${i}" data-field="site" value="${esc(r.site)}"></label>${inputText(i,'person','担当者',r.person)}<label>作業内容<textarea class="legacy-input" data-index="${i}" data-field="work">${esc(r.work)}</textarea></label>${inputText(i,'workers','作業員（、区切り）',r.workers.join('、'))}<div class="row"><div style="flex:1">${inputText(i,'start','開始（例 08:00）',Number.isFinite(r.start)?fmt(r.start):'')}</div><div style="flex:1">${inputText(i,'end','終了（例 27:00）',Number.isFinite(r.end)?fmt(r.end):'')}</div></div><label>休憩<select class="legacy-input" data-index="${i}" data-field="breakMin"><option value="unknown" ${r.breakMin===null?'selected':''}>不明（Wordに記載なし）</option><option value="0" ${r.breakMin===0?'selected':''}>なし（0分）</option><option value="60" ${r.breakMin===60?'selected':''}>1時間（60分）</option></select></label></details>`}
+function makePreview(n){const duplicates=existingSig(), duplicatesCount=pending.filter(r=>duplicates.has(sig(r))).length;
+view.innerHTML=`<div class="note">抽出 ${pending.length}件 ／ 既存と一致 ${duplicatesCount}件 ／ 要確認 ${pending.filter(r=>r.issues.length).length}件。<strong>チェックした行だけ追加</strong>するで。既存の記録は変更しません。</div><datalist id="legacySiteList">${db.sites.map(s=>`<option value="${esc(s.name)}">`).join('')}</datalist><p class="muted">同じ物件でも書き方が違う場合は、現場名を既存の名称に直してな。休憩不明の記録は月報の労働時間に使う前に確認が必要やで。</p>${pending.map((r,i)=>row(r,i,duplicates)).join('')}<label><input type="checkbox" id="legacyBackupConfirm" style="width:auto"> 今の記録のJSONバックアップを保存済み</label><button type="button" id="legacyImportCommit" class="btn full">チェックした作業履歴を追加する</button>`;
+view.querySelectorAll('.legacy-input').forEach(el=>el.addEventListener('change',()=>{const i=Number(el.dataset.index),key=el.dataset.field,v=el.value;if(key==='workers')pending[i].workers=v.split(/[、,，]/).map(x=>x.trim()).filter(Boolean);else if(key==='start'||key==='end')pending[i][key]=timeNum(v);else if(key==='breakMin')pending[i][key]=v==='unknown'?null:Number(v);else pending[i][key]=v.trim();pending[i].issues=[];}));
+document.getElementById('legacyImportCommit').onclick=commit;}
+function commit(){if(!document.getElementById('legacyBackupConfirm').checked){alert('まず今の記録をJSONバックアップして、チェックを付けてな');return}const chosen=Array.from(view.querySelectorAll('[data-use]:checked')).map(x=>pending[Number(x.dataset.use)]);const existing=existingSig();const ready=[];let skipped=0;for(const r of chosen){const dt=/^\d{4}-\d{2}-\d{2}$/.test(r.date)&&!isNaN(Date.parse(r.date));if(!dt||!r.site||!r.person||!r.work||!Array.isArray(r.workers)||!r.workers.length||!Number.isFinite(r.start)||!Number.isFinite(r.end)||r.end<=r.start||r.end>1800){alert('必須項目や日時が不正な行があるで。確認してから追加してな：'+r.site+' '+r.date);return}const k=sig(r);if(existing.has(k)){skipped++;continue}existing.add(k);ready.push(r)}if(!ready.length){alert('新たに追加する記録はないで（既存と一致：'+skipped+'件）');return}const unknown=ready.filter(r=>r.breakMin===null).length;
+if(!confirm(`${ready.length}件を追加するで。\n休憩不明：${unknown}件\n既存と一致して除外：${skipped}件\n今の履歴は消さへん。続ける？`))return;
+const next={sites:db.sites.map(s=>({...s})),records:db.records.slice()};for(const r of ready){next.records.push({...r,id:'word_'+Date.now()+'_'+Math.random().toString(36).slice(2,10),issues:undefined,importedFromWord:true});const match=next.sites.find(s=>siteKey(s.name)===siteKey(r.site));if(!match)next.sites.push({name:r.site,person:r.person,status:'active',suppressOverlap:false});}
+const before=db;db=next;if(!persist()){db=before;return}renderSelect();renderLists();updateMonth();renderBackupWarning();view.innerHTML=`<div class="note">${ready.length}件を追加したで。休憩不明の記録は月報出力前に休憩を確認してな。</div>`;toast('Wordから'+ready.length+'件取り込んだで');}
+btn.onclick=async()=>{const file=input.files&&input.files[0];if(!file){alert('Wordファイルを選んでな');return}if(!/\.docx$/i.test(file.name)){alert('Wordの.docxファイルを選んでな');return}if(!window.JSZip){alert('読込に必要なライブラリを取得できません。ネット接続を確認してな');return}try{btn.disabled=true;view.innerHTML='<p class="muted">Wordを読み取っています…</p>';const zip=await JSZip.loadAsync(await file.arrayBuffer());const part=zip.file('word/document.xml');if(!part)throw Error('有効な.docxファイルではありません');const xml=new DOMParser().parseFromString(await part.async('text'),'application/xml');if(xml.getElementsByTagName('parsererror').length)throw Error('WordのXMLを読み込めません');const {result,seenTables}=extract(xml);if(!result.length)throw Error('作業履歴を見つけられませんでした。会社の日報書式か確認してな');pending=result;makePreview(seenTables)}catch(e){view.innerHTML='<p class="alert">'+esc(e.message)+'</p>'}finally{btn.disabled=false}};
+const exp=document.getElementById('excelExport');if(exp){exp.addEventListener('click',e=>{const [from,to]=cutoffRange(document.getElementById('cutoff').value);const unknown=db.records.filter(r=>r.date>=from&&r.date<=to&&r.breakMin==null);if(unknown.length){e.stopImmediatePropagation();alert(`${unknown.length}件の休憩時間が未確認やで。月報を誤計算しないため、この期間は出力を止めたで。該当記録の休憩時間を確認してから再出力してな。`)}} ,true)}
+})();
