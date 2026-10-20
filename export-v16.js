@@ -58,7 +58,7 @@ function pageHeader(meta,site,part,rs){
   // Existing records on first installation: historical header dates cannot be recovered.
   return pageDateStr(rs[rs.length-1].date);
 }
-function renderPage(doc,section,site,rs,part,headerDate){const pars=children(section,'p'),tbl=children(section,'tbl')[0];assignParagraph(pars[1],`${headerDate}　№${part}`);assignParagraph(pars[2],'物件名：'+site.name);const trs=children(tbl,'tr');if(site.specNo){const m=/^([A-Z]+)([0-9]{4})([0-9]+)$/.exec(site.specNo);if(!m)throw Error('仕様書No.の形式が正しくありません：'+site.specNo);setCellText(tableCell(trs[0],2),m[1]);setCellText(tableCell(trs[0],3),m[2]);setCellText(tableCell(trs[0],4),m[3]);}setCellText(tableCell(trs[0],6),site.person||rs[0].person||'');setCellText(tableCell(trs[0],8),selectedStaffProfile().fullName);
+function renderPage(doc,section,site,rs,part,headerDate){const pars=children(section,'p'),tbl=children(section,'tbl')[0];assignParagraph(pars[1],`${headerDate}　№${part}`);assignParagraph(pars[2],'物件名：'+site.name);const trs=children(tbl,'tr');setCellText(tableCell(trs[0],6),site.person||rs[0].person||'');setCellText(tableCell(trs[0],8),selectedStaffProfile().fullName);
   for(let i=0;i<10;i++){let r=rs[i],row=2+i*3;if(!r)continue;let d=new Date(r.date+'T12:00:00'),dw=['日','月','火','水','木','金','土'][d.getDay()];setCellText(tableCell(trs[row],0),String(d.getFullYear()-2018));setCellText(tableCell(trs[row],1),String(d.getMonth()+1));setCellText(tableCell(trs[row],2),String(d.getDate()));setCellText(tableCell(trs[row],3),dw);tcParagraph(tableCell(trs[row],4),r.work);let wp=tcParagraph(tableCell(trs[row+1],4),'');writeStaff(wp,(r.workers||[]).join('、')+(r.workers||[]).length+'人',`${time(r.start)}~${time(r.end)}`)}
 }
 async function word(status,onlySite=null){if(!ready())return;selectedStaffProfile();closingFileDate();const d=current(),sites=d.sites.filter(s=>s.status===status&&(!onlySite||s.name===onlySite)),all=d.records.filter(r=>sites.some(s=>s.name===r.site));if(!all.length){alert('対象の記録はまだないで');return}let res=await fetch('./word-template.docx',{cache:'no-store'});if(!res.ok)throw Error('Word雛形が見つかりません。word-template.docxをアップロードしてな');const zip=await JSZip.loadAsync(await res.arrayBuffer());const file=zip.file('word/document.xml');if(!file)throw Error('Word雛形の構造が違います');const doc=parse(await file.async('text')),body=q(doc,'body')[0],sect=children(body,'sectPr')[0],page=children(body,'p').slice(0,4).concat(children(body,'tbl').slice(0,1));if(page.length!==5||!sect)throw Error('Word雛形のページ構造が違います');let count=0;const pageMeta=pageMetaRead(),pendingMeta={...pageMeta};for(const s of sites){let rs=all.filter(r=>r.site===s.name).sort((a,b)=>a.date.localeCompare(b.date)||a.start-b.start);let blocks=[];for(const r of rs){let last=blocks[blocks.length-1];if(!last||last.length>=10){blocks.push([r])}else last.push(r)}for(let pageIdx=0;pageIdx<blocks.length;pageIdx++){const pageRecords=blocks[pageIdx];if(count){const sep=doc.createElementNS(NS_W,'w:p'),run=doc.createElementNS(NS_W,'w:r'),br=doc.createElementNS(NS_W,'w:br');br.setAttributeNS(NS_W,'w:type','page');run.append(br);sep.append(run);body.insertBefore(sep,sect)}const block=page.map(e=>e.cloneNode(true));for(const e of block)body.insertBefore(e,sect);const part=pageIdx+1,key=s.name+'::'+part,headerDate=pageHeader(pageMeta,s.name,part,pageRecords);
@@ -70,6 +70,38 @@ function dateSerial(s){return (Date.parse(s+'T00:00:00Z')-Date.UTC(1899,11,30))/
 function getCell(doc,ref){return [...x(doc,'c')].find(c=>c.getAttribute('r')===ref)}
 function writeCell(doc,ref,value,kind,formula){let c=getCell(doc,ref);if(!c)throw Error('元のExcelに '+ref+' セルがありません');let oldFormula=children(c,'f');for(const o of [...c.children])if(['is','f','v'].includes(o.localName))c.removeChild(o);if(kind==='text'){c.setAttribute('t','inlineStr');if(value!==''){let is=doc.createElementNS(NS_X,'is'),t=doc.createElementNS(NS_X,'t');t.textContent=String(value);is.append(t);c.append(is)}}else{c.removeAttribute('t');if(formula){let f=doc.createElementNS(NS_X,'f');f.textContent=formula;c.append(f)}if(value!==''&&value!==null){let v=doc.createElementNS(NS_X,'v');v.textContent=String(value);c.append(v)}}}
 function setFormat(styles,ws,refs){let nums=x(styles,'numFmts')[0];if(!nums){nums=styles.createElementNS(NS_X,'numFmts');nums.setAttribute('count','0');styles.documentElement.insertBefore(nums,x(styles,'fonts')[0])}let nf=styles.createElementNS(NS_X,'numFmt');nf.setAttribute('numFmtId','181');nf.setAttribute('formatCode','[h]:mm');nums.append(nf);nums.setAttribute('count',String(children(nums,'numFmt').length));let xfs=x(styles,'cellXfs')[0];if(!xfs)throw Error('時刻書式がありません');const old=children(xfs,'xf');let base=getCell(ws,'E3');let baseIdx=Number(base?.getAttribute('s')||0),xf=old[baseIdx].cloneNode(true);xf.setAttribute('numFmtId','181');xf.setAttribute('applyNumberFormat','1');let idx=old.length;xfs.append(xf);xfs.setAttribute('count',String(idx+1));for(const ref of refs){const c=getCell(ws,ref);if(c)c.setAttribute('s',String(idx))}}
+// Excel月報の生成に成功したときだけ、バックアップ確認を表示する。
+function showMonthlyBackupReminder(){
+  if(document.getElementById('monthlyBackupReminder'))return;
+  const overlay=document.createElement('div');
+  overlay.id='monthlyBackupReminder';
+  overlay.className='overlay';
+  overlay.setAttribute('role','dialog');
+  overlay.setAttribute('aria-modal','true');
+  overlay.setAttribute('aria-labelledby','monthlyBackupReminderTitle');
+  const dialog=document.createElement('div');
+  dialog.className='dialog';
+  const title=document.createElement('h2');
+  title.id='monthlyBackupReminderTitle';
+  title.textContent='バックアップは取りましたか？';
+  const actions=document.createElement('div');
+  actions.className='actions';
+  actions.style.marginTop='16px';
+  const done=document.createElement('button');
+  done.type='button';done.className='btn alt';done.textContent='はい、取りました';
+  const backup=document.createElement('button');
+  backup.type='button';backup.className='btn';backup.textContent='バックアップする';
+  done.onclick=()=>overlay.remove();
+  backup.onclick=()=>{
+    overlay.remove();
+    // すでにあるJSONバックアップボタンを再利用する。既存データは変更しない。
+    const existing=document.getElementById('json');
+    if(existing){existing.click();}
+    else{alert('設定画面でバックアップを保存してな。');}
+  };
+  actions.append(done,backup);dialog.append(title,actions);overlay.append(dialog);
+  document.body.append(overlay);done.focus();
+}
 async function excel(){if(!ready())return;try{const response=await fetch('./monthly-template.xlsx',{cache:'no-store'});if(!response.ok)throw Error('固定の月報雛形が読み込めません。monthly-template.xlsx が公開されているか確認してな');const templateBytes=await response.arrayBuffer();const staff=selectedStaffProfile(),me=staff.employee;const d=current(),month=document.getElementById('cutoff').value,[from,to]=period(month);const rs=d.records.filter(r=>r.date>=from&&r.date<=to&&Array.isArray(r.workers)&&r.workers.includes(me)).sort((a,b)=>a.date.localeCompare(b.date)||a.start-b.start);if(rs.length>36)throw Error('36件を超えたので雛形の行数が足りません');const zip=await JSZip.loadAsync(templateBytes),sheet=zip.file('xl/worksheets/sheet1.xml'),stylesFile=zip.file('xl/styles.xml');if(!sheet||!stylesFile)throw Error('元の月報.xlsxとは構成が違います');const doc=parse(await sheet.async('text')),styles=parse(await stylesFile.async('text'));if(!getCell(doc,'A38')||!getCell(doc,'G3'))throw Error('会社の月報雛形と異なる形式です');const [submitYear,submitMonth]=month.split('-').map(Number);if(!Number.isInteger(submitYear)||!Number.isInteger(submitMonth)||submitMonth<1||submitMonth>12)throw Error('提出月を選んでな');writeCell(doc,'A1',String(submitMonth)+'月','text');writeCell(doc,'G1','社名','text');writeCell(doc,'H1',staff.company,'text');const timeRefs=[];for(let i=0;i<36;i++){let row=i+3,r=rs[i];for(let col of ['A','B','C','D','E','F']){const ref=col+row;if(!r){writeCell(doc,ref,'','text');continue}let v='',kind='text';if(col==='A'){v=dateSerial(r.date);kind='num'}if(col==='B')v=r.site;if(col==='C')v=r.person||'';if(col==='D'){v=r.start/1440;kind='num';timeRefs.push(ref)}if(col==='E'){v=r.end/1440;kind='num';timeRefs.push(ref)}if(col==='F'){v=(Number(r.breakMin)||0)/1440;kind='num';timeRefs.push(ref)}writeCell(doc,ref,v,kind)}const g=r? (r.end-r.start-(Number(r.breakMin)||0))/1440:'';if(r&&g<0)throw Error('休憩・時刻の入力が正しくありません：'+r.date);writeCell(doc,'G'+row,g,'num',`IF(D${row}="","",E${row}-D${row}-F${row})`);let h=r?Math.max(0,r.end-r.start-(Number(r.breakMin)||0)-540)/1440:'';
  writeCell(doc,'H'+row,h===0?'':h,'num',`IF(OR(D${row}="",G${row}<=TIME(9,0,0)),"",G${row}-TIME(9,0,0))`);
  // 元雛形の I列の意味は「退出時刻が deta!D2 (22:00) を超えた分」。
@@ -93,7 +125,7 @@ writeCell(doc,'I47',totals.overtime/1440,'num','SUM(H3:H44)');
 writeCell(doc,'I48',totals.night/1440,'num','SUM(I3:I44)');
 // Totals display as cumulative durations rather than wrapping after 24h.
 timeRefs.push('I46','I47','I48');
-setFormat(styles,doc,timeRefs);zip.file('xl/worksheets/sheet1.xml',serial(doc));zip.file('xl/styles.xml',serial(styles));const wb=zip.file('xl/workbook.xml');if(wb){let wd=parse(await wb.async('text')),cp=x(wd,'calcPr')[0];if(!cp){cp=wd.createElementNS(NS_X,'calcPr');wd.documentElement.append(cp)}cp.setAttribute('fullCalcOnLoad','1');cp.setAttribute('forceFullCalc','1');cp.setAttribute('calcMode','auto');zip.file('xl/workbook.xml',serial(wd))}save(await zip.generateAsync({type:'blob',mimeType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}),`${closingFileDate()} 月報.xlsx`);alert(`${me}の勤務記録を${rs.length}件出力したで。実働・9時間超過・22時以降の時間の式と計算結果を反映したで。休憩時間と会社の残業区分は提出前に確認してな。`)}catch(e){alert('月報を出力できません：'+e.message)}}
+setFormat(styles,doc,timeRefs);zip.file('xl/worksheets/sheet1.xml',serial(doc));zip.file('xl/styles.xml',serial(styles));const wb=zip.file('xl/workbook.xml');if(wb){let wd=parse(await wb.async('text')),cp=x(wd,'calcPr')[0];if(!cp){cp=wd.createElementNS(NS_X,'calcPr');wd.documentElement.append(cp)}cp.setAttribute('fullCalcOnLoad','1');cp.setAttribute('forceFullCalc','1');cp.setAttribute('calcMode','auto');zip.file('xl/workbook.xml',serial(wd))}save(await zip.generateAsync({type:'blob',mimeType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}),`${closingFileDate()} 月報.xlsx`);alert(`${me}の勤務記録を${rs.length}件出力したで。実働・9時間超過・22時以降の時間の式と計算結果を反映したで。休憩時間と会社の残業区分は提出前に確認してな。`);showMonthlyBackupReminder()}catch(e){alert('月報を出力できません：'+e.message)}}
 document.getElementById('wordActive').onclick=()=>word('active').catch(e=>alert('Word出力エラー：'+e.message));document.getElementById('wordClosed').onclick=()=>word('closed').catch(e=>alert('Word出力エラー：'+e.message));document.getElementById('excelExport').onclick=excel;
 })();
 
