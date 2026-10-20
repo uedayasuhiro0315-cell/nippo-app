@@ -90,13 +90,32 @@ function officialSiteLink(site){
   const title=el('h2','正式物件との紐付け'),oldName=site.name;
   dialog.append(title,el('p','現在の物件：'+oldName,'note'),el('p','会社の仕様書一覧から、該当する工事を選んでな。似た名前の別工事に注意してな。','muted'));
   const search=el('input');search.placeholder='正式名称・仕様書No.で検索';search.setAttribute('aria-label','正式物件の検索');
-  const select=el('select');select.setAttribute('aria-label','紐付け先の正式物件');select.size=5;select.style.height='190px';
+  // Search results appear directly below the input: no second dropdown tap required.
+  const resultList=el('div');resultList.setAttribute('role','group');resultList.setAttribute('aria-label','正式物件の検索結果');
+  resultList.style.maxHeight='260px';resultList.style.overflowY='auto';resultList.style.margin='8px 0';
   const preview=el('div','','note');
-  function options(){const key=search.value.trim().toLowerCase();const results=sortOfficialByNo(OFFICIAL_MASTER.filter(v=>(v.name+' '+v.no).toLowerCase().includes(key)));select.replaceChildren(...results.map(v=>option(v.no+' ／ '+v.name,masterKey(v.no,v.name))));if(site.specNo&&results.some(v=>v.no===site.specNo&&v.name===site.name))select.value=masterKey(site.specNo,site.name);previewSelection();}
-  function previewSelection(){const found=OFFICIAL_MASTER.find(v=>masterKey(v.no,v.name)===select.value);preview.textContent=found?'正式名称：'+found.name+' ／ 仕様書No.：'+found.no:'該当する物件がありません';}
-  search.oninput=options;select.onchange=previewSelection;options();
+  let selectedKey=site.specNo?masterKey(site.specNo,site.name):'';
+  function selectedOfficial(){return OFFICIAL_MASTER.find(v=>masterKey(v.no,v.name)===selectedKey)}
+  function options(){
+    const key=search.value.trim().toLowerCase();
+    const results=sortOfficialByNo(OFFICIAL_MASTER.filter(v=>(v.name+' '+v.no).toLowerCase().includes(key)));
+    resultList.replaceChildren();
+    if(!results.length)resultList.append(el('p','該当する仕様書が見つからへんかったで。','muted'));
+    for(const entry of results){
+      const entryKey=masterKey(entry.no,entry.name);
+      const row=button(entry.no+' ／ '+entry.name,()=>{selectedKey=entryKey;options();});
+      row.type='button';row.className='btn alt';row.style.display='block';row.style.width='100%';row.style.textAlign='left';row.style.whiteSpace='normal';row.style.marginBottom='6px';row.style.lineHeight='1.5';
+      row.style.border=entryKey===selectedKey?'2px solid #176168':'1px solid #c9d4df';
+      if(entryKey===selectedKey){row.style.background='#e6f2f2';row.textContent='✓ '+row.textContent;row.setAttribute('aria-pressed','true')}
+      else row.setAttribute('aria-pressed','false');
+      resultList.append(row);
+    }
+    const found=selectedOfficial();
+    preview.textContent=found?'選択中：'+found.name+' ／ 仕様書No.：'+found.no:'候補をタップして選んでな。';
+  }
+  search.oninput=()=>{selectedKey='';options()};options();
   const actions=el('div',undefined,'actions');actions.append(button('キャンセル',()=>shade.remove()),button('この物件に紐付ける',()=>{
-    const found=OFFICIAL_MASTER.find(v=>masterKey(v.no,v.name)===select.value);if(!found){alert('正式物件を選んでな');return}
+    const found=selectedOfficial();if(!found){alert('正式物件を選んでな');return}
     if(db.sites.some(v=>v!==site&&(v.name===found.name||(v.specNo===found.no&&v.name===found.name)))){alert('この正式名称または仕様書No.は、ほかの物件で使われているで。重複を確認してな');return}
     const affected=db.records.filter(r=>r.site===oldName).length;
     if(!confirm('「'+oldName+'」を「'+found.name+'」へ紐付ける？\n'+affected+'件の作業履歴とWordの日付情報も引き継ぐで。'))return;
@@ -138,7 +157,7 @@ function officialSiteLink(site){
     actions.append(unlink);
     dialog.append(el('p','解除しても作業履歴は削除されへん。以前の略称が残っていない物件は、戻す名前を入力してな。','muted'));
   }
-  dialog.append(search,select,preview,actions);shade.append(dialog);document.body.append(shade);
+  dialog.append(search,resultList,preview,actions);shade.append(dialog);document.body.append(shade);
 }
 function archiveGroupMonth(s){return /^\d{4}-(0[1-9]|1[0-2])$/.test(s.archivedMonth||'')?s.archivedMonth:''}
 function archiveSelected(){const month=$('archiveMonth').value;const selected=db.sites.filter(s=>s.status==='closed'&&s.submitted);if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)){alert('保管先の締め月を選んでな');return}if(!selected.length)return;if(!confirm(`${month}締めとして、提出済み${selected.length}物件を保管する？\n作業履歴・過去の月報は削除されへんで。`))return;for(const site of selected){site.status='archived';site.archivedMonth=month;site.submitted=true;}if(!persist())return;renderSelect();renderLists();toast(`${selected.length}物件を保管したで`)}
