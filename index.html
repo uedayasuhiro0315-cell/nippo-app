@@ -36,10 +36,14 @@ function saveOfficialMaster(next,removed=REMOVED_MASTER){try{
  localStorage.setItem(REMOVED_MASTER_KEY,JSON.stringify(tomb));
  OFFICIAL_MASTER=clean;REMOVED_MASTER=new Set(tomb);renderMasterDeleteList();return true
  }catch(e){alert('仕様書マスターを保存できなかったで。端末の保存容量を確認してな。');return false}}
+function sortOfficialByNo(items){return [...items].sort((a,b)=>
+ String(a.no).localeCompare(String(b.no),'ja',{numeric:true,sensitivity:'base'}) ||
+ String(a.name).localeCompare(String(b.name),'ja',{numeric:true,sensitivity:'base'})
+)}
 function masterInUse(item){return db.sites.some(s=>s.specNo===item.no&&s.name===item.name)}
 function renderMasterDeleteList(){
  const panel=$('masterDeleteList'),count=$('masterDeleteCount'),search=$('masterDeleteSearch');if(!panel||!count||!search)return;
- const q=search.value.trim().toLowerCase(),found=OFFICIAL_MASTER.filter(x=>(x.no+' '+x.name).toLowerCase().includes(q));
+ const q=search.value.trim().toLowerCase(),found=sortOfficialByNo(OFFICIAL_MASTER.filter(x=>(x.no+' '+x.name).toLowerCase().includes(q)));
  count.textContent='表示：'+found.length+'件 ／ 登録合計：'+OFFICIAL_MASTER.length+'件';panel.replaceChildren();
  if(!found.length){panel.append(el('div','該当する仕様書はないで','empty'));return}
  for(const item of found){const card=el('div',undefined,'item');card.append(el('strong',item.name),el('div','仕様書No.：'+item.no,'muted'));
@@ -88,7 +92,7 @@ function officialSiteLink(site){
   const search=el('input');search.placeholder='正式名称・仕様書No.で検索';search.setAttribute('aria-label','正式物件の検索');
   const select=el('select');select.setAttribute('aria-label','紐付け先の正式物件');select.size=5;select.style.height='190px';
   const preview=el('div','','note');
-  function options(){const key=search.value.trim().toLowerCase();const results=OFFICIAL_MASTER.filter(v=>(v.name+' '+v.no).toLowerCase().includes(key));select.replaceChildren(...results.map(v=>option(v.no+' ／ '+v.name,masterKey(v.no,v.name))));if(site.specNo&&results.some(v=>v.no===site.specNo&&v.name===site.name))select.value=masterKey(site.specNo,site.name);previewSelection();}
+  function options(){const key=search.value.trim().toLowerCase();const results=sortOfficialByNo(OFFICIAL_MASTER.filter(v=>(v.name+' '+v.no).toLowerCase().includes(key)));select.replaceChildren(...results.map(v=>option(v.no+' ／ '+v.name,masterKey(v.no,v.name))));if(site.specNo&&results.some(v=>v.no===site.specNo&&v.name===site.name))select.value=masterKey(site.specNo,site.name);previewSelection();}
   function previewSelection(){const found=OFFICIAL_MASTER.find(v=>masterKey(v.no,v.name)===select.value);preview.textContent=found?'正式名称：'+found.name+' ／ 仕様書No.：'+found.no:'該当する物件がありません';}
   search.oninput=options;select.onchange=previewSelection;options();
   const actions=el('div',undefined,'actions');actions.append(button('キャンセル',()=>shade.remove()),button('この物件に紐付ける',()=>{
