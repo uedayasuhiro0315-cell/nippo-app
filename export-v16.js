@@ -58,15 +58,18 @@ function pageHeader(meta,site,part,rs){
   // Existing records on first installation: historical header dates cannot be recovered.
   return pageDateStr(rs[rs.length-1].date);
 }
-// Word template: first-row cells 2 = prefix (KJ/ML), 3 = 4100, 4 = remaining digits.
-// Never rely on the template's default 'KJ 4100' for an unlinked project.
+// Keep the template's preprinted KJ / 4100 intact for ordinary KJ4100 projects.
+// For an unlinked project, preserve the printed prefix and leave the suffix blank.
+// Exceptional prefixes (e.g. ML4100) must still print accurately.
 function writeSpecificationNumber(row,site){
   const full=String(site.specNo||'').trim().toUpperCase();
+  const prefix=tableCell(row,2),series=tableCell(row,3),suffix=tableCell(row,4);
+  if(!full){setCellText(suffix,'');return}
   const m=/^([A-Z]+)(\d{4})([0-9A-Z-]+)$/.exec(full);
-  if(full&&!m)throw Error('仕様書No.の形式を確認してな：'+site.name+' ('+full+')');
-  setCellText(tableCell(row,2),m?m[1]:'');
-  setCellText(tableCell(row,3),m?m[2]:'');
-  setCellText(tableCell(row,4),m?m[3]:'');
+  if(!m)throw Error('仕様書No.の形式を確認してな：'+site.name+' ('+full+')');
+  if(m[1]!=='KJ')setCellText(prefix,m[1]);
+  if(m[2]!=='4100')setCellText(series,m[2]);
+  setCellText(suffix,m[3]);
 }
 function renderPage(doc,section,site,rs,part,headerDate){const pars=children(section,'p'),tbl=children(section,'tbl')[0];assignParagraph(pars[1],`${headerDate}　№${part}`);assignParagraph(pars[2],'物件名：'+site.name);const trs=children(tbl,'tr');writeSpecificationNumber(trs[0],site);setCellText(tableCell(trs[0],6),site.person||rs[0].person||'');setCellText(tableCell(trs[0],8),selectedStaffProfile().fullName);
   for(let i=0;i<10;i++){let r=rs[i],row=2+i*3;if(!r)continue;let d=new Date(r.date+'T12:00:00'),dw=['日','月','火','水','木','金','土'][d.getDay()];setCellText(tableCell(trs[row],0),String(d.getFullYear()-2018));setCellText(tableCell(trs[row],1),String(d.getMonth()+1));setCellText(tableCell(trs[row],2),String(d.getDate()));setCellText(tableCell(trs[row],3),dw);tcParagraph(tableCell(trs[row],4),r.work);let wp=tcParagraph(tableCell(trs[row+1],4),'');writeStaff(wp,(r.workers||[]).join('、')+(r.workers||[]).length+'人',`${time(r.start)}~${time(r.end)}`)}
