@@ -116,30 +116,109 @@ function showMonthlyBackupReminder(){
   actions.append(done,backup);dialog.append(title,actions);overlay.append(dialog);
   document.body.append(overlay);done.focus();
 }
-async function excel(){if(!ready())return;try{const response=await fetch('./monthly-template.xlsx',{cache:'no-store'});if(!response.ok)throw Error('固定の月報雛形が読み込めません。monthly-template.xlsx が公開されているか確認してな');const templateBytes=await response.arrayBuffer();const staff=selectedStaffProfile(),me=staff.employee;const d=current(),month=document.getElementById('cutoff').value,[from,to]=period(month);const rs=d.records.filter(r=>r.date>=from&&r.date<=to&&Array.isArray(r.workers)&&r.workers.includes(me)).sort((a,b)=>a.date.localeCompare(b.date)||a.start-b.start);if(rs.length>36)throw Error('36件を超えたので雛形の行数が足りません');const zip=await JSZip.loadAsync(templateBytes),sheet=zip.file('xl/worksheets/sheet1.xml'),stylesFile=zip.file('xl/styles.xml');if(!sheet||!stylesFile)throw Error('元の月報.xlsxとは構成が違います');const doc=parse(await sheet.async('text')),styles=parse(await stylesFile.async('text'));if(!getCell(doc,'A38')||!getCell(doc,'G3'))throw Error('会社の月報雛形と異なる形式です');const [submitYear,submitMonth]=month.split('-').map(Number);if(!Number.isInteger(submitYear)||!Number.isInteger(submitMonth)||submitMonth<1||submitMonth>12)throw Error('提出月を選んでな');writeCell(doc,'A1',String(submitMonth)+'月','text');writeCell(doc,'G1','社名','text');writeCell(doc,'H1',staff.company,'text');const timeRefs=[];for(let i=0;i<36;i++){let row=i+3,r=rs[i];for(let col of ['A','B','C','D','E','F']){const ref=col+row;if(!r){writeCell(doc,ref,'','text');continue}let v='',kind='text';if(col==='A'){v=(i>0&&rs[i-1].date===r.date)?'':dateSerial(r.date);kind=v===''?'text':'num'}if(col==='B')v=r.site;if(col==='C')v=r.person||'';if(col==='D'){v=r.start/1440;kind='num';timeRefs.push(ref)}if(col==='E'){v=r.end/1440;kind='num';timeRefs.push(ref)}if(col==='F'){v=(Number(r.breakMin)||0)/1440;kind='num';timeRefs.push(ref)}writeCell(doc,ref,v,kind)}const g=r? (r.end-r.start-(Number(r.breakMin)||0))/1440:'';if(r&&g<0)throw Error('休憩・時刻の入力が正しくありません：'+r.date);writeCell(doc,'G'+row,g,'num',`IF(D${row}="","",E${row}-D${row}-F${row})`);let h=r?Math.max(0,r.end-r.start-(Number(r.breakMin)||0)-540)/1440:'';
- writeCell(doc,'H'+row,h===0?'':h,'num',`IF(OR(D${row}="",G${row}<=TIME(9,0,0)),"",G${row}-TIME(9,0,0))`);
- // 元雛形の I列の意味は「退出時刻が deta!D2 (22:00) を超えた分」。
- // 24時以降は Excel の経過時刻として 1.0 以上で保持する。
- const nightCutoff=22*60;
- let night=r?Math.max(0,Number(r.end)-nightCutoff)/1440:'';
- writeCell(doc,'I'+row,night===0?'':night,'num',`IF(E${row}>deta!$D$2,E${row}-deta!$D$2,"")`);
- if(r){timeRefs.push('G'+row,'H'+row,'I'+row)}}
-// Ver.7: summary cells use explicit cached numeric values as iOS Excel viewers
-// often show stale 0 when they don't recalculate formulas on opening.
-// Keep the company's original formula semantics and use precomputed values.
-const totals=rs.reduce((a,r)=>{
- const minutes=Number(r.end)-Number(r.start)-(Number(r.breakMin)||0);
- a.work+=minutes;
- a.overtime+=Math.max(0,minutes-540); // H: over nine hours per entry, per template
- a.night+=Math.max(0,Number(r.end)-1320); // I: after 22:00
- return a;
-},{work:0,overtime:0,night:0});
-writeCell(doc,'I46',(totals.work-totals.overtime)/1440,'num','SUM(G3:G44)-SUM(H3:H44)');
-writeCell(doc,'I47',totals.overtime/1440,'num','SUM(H3:H44)');
-writeCell(doc,'I48',totals.night/1440,'num','SUM(I3:I44)');
-// Totals display as cumulative durations rather than wrapping after 24h.
-timeRefs.push('I46','I47','I48');
-setFormat(styles,doc,timeRefs);zip.file('xl/worksheets/sheet1.xml',serial(doc));zip.file('xl/styles.xml',serial(styles));const wb=zip.file('xl/workbook.xml');if(wb){let wd=parse(await wb.async('text')),cp=x(wd,'calcPr')[0];if(!cp){cp=wd.createElementNS(NS_X,'calcPr');wd.documentElement.append(cp)}cp.setAttribute('fullCalcOnLoad','1');cp.setAttribute('forceFullCalc','1');cp.setAttribute('calcMode','auto');zip.file('xl/workbook.xml',serial(wd))}save(await zip.generateAsync({type:'blob',mimeType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}),`${closingFileDate()} 月報.xlsx`);alert(`${me}の勤務記録を${rs.length}件出力したで。実働・9時間超過・22時以降の時間の式と計算結果を反映したで。休憩時間と会社の残業区分は提出前に確認してな。`);showMonthlyBackupReminder()}catch(e){alert('月報を出力できません：'+e.message)}}
+// Company v3 workbook: 5 employee tabs + hidden deta worksheet.
+// Note: local data only; do not represent other employees' sheets as complete.
+const MONTHLY_SHEETS=[
+ {employee:'岡田',index:1,capacity:42,summaryRow:45,header:'name'},
+ {employee:'牧野',index:2,capacity:42,summaryRow:45,header:'name'},
+ {employee:'與儀',index:3,capacity:42,summaryRow:45,header:'company'},
+ {employee:'植田',index:4,capacity:42,summaryRow:45,header:'company'},
+ {employee:'谷川',index:5,capacity:43,summaryRow:46,header:'company'}
+];
+function minutesNight(start,end){
+ const overlap=(a,b)=>Math.max(0,Math.min(end,b)-Math.max(start,a));
+ return overlap(0,300)+overlap(1320,1740)+overlap(2760,3180);
+}
+function countPeriodDates(from,to){
+ const a=Date.parse(from+'T00:00:00Z'),b=Date.parse(to+'T00:00:00Z');
+ if(!Number.isFinite(a)||!Number.isFinite(b)||b<a)throw Error('締め期間が不正やで');
+ return Math.round((b-a)/86400000)+1;
+}
+async function excel(){
+ if(!ready())return;
+ try{
+  const employee=selectedStaffProfile().employee;
+  const conf=MONTHLY_SHEETS.find(s=>s.employee===employee);
+  if(!conf)throw Error('社員設定を確認してな');
+  const response=await fetch('./monthly-template.xlsx',{cache:'no-store'});
+  if(!response.ok)throw Error('新しい月報雛形 monthly-template.xlsx が読めへんで');
+  const zip=await JSZip.loadAsync(await response.arrayBuffer());
+  const sheetPath='xl/worksheets/sheet'+conf.index+'.xml';
+  const entry=zip.file(sheetPath),stylesFile=zip.file('xl/styles.xml');
+  if(!entry||!stylesFile||!zip.file('xl/worksheets/sheet5.xml'))throw Error('社員別5タブの雛形ではないで');
+  const workbookEntry=zip.file('xl/workbook.xml');
+  if(workbookEntry){
+   const wdoc=parse(await workbookEntry.async('text'));
+   const sheets=x(wdoc,'sheet');
+   const named=sheets[conf.index-1];
+   if(!named||!(named.getAttribute('name')||'').includes(employee))throw Error('選択した社員のタブを確認できへんで');
+  }
+  const styles=parse(await stylesFile.async('text'));
+  const d=current(),month=document.getElementById('cutoff').value,[from,to]=period(month);
+  const submitMonth=Number(month.split('-')[1]);
+  if(!Number.isInteger(submitMonth)||submitMonth<1||submitMonth>12)throw Error('提出月を選んでな');
+  const rs=d.records.filter(r=>r.date>=from&&r.date<=to&&Array.isArray(r.workers)&&r.workers.includes(employee))
+    .sort((a,b)=>a.date.localeCompare(b.date)||Number(a.start)-Number(b.start));
+  if(rs.length>conf.capacity)throw Error(employee+'の勤務記録が'+rs.length+'件あるで。新雛形の'+conf.capacity+'行を超えるため出力できへん');
+  const days=countPeriodDates(from,to),workedDays=new Set(rs.map(r=>r.date));
+  const holidays=days-workedDays.size;
+  if(!confirm(employee+'の'+from+'〜'+to+'の月報を出力するで。\n勤務 '+workedDays.size+'日（'+rs.length+'件）／ 日報記録なし '+holidays+'日を「休み」に集計する。\n※入力漏れや別端末の作業記録も休みとして数えるから、提出前に確認してな。続ける？'))return;
+  const doc=parse(await entry.async('text'));
+  const lastRow=2+conf.capacity,s=conf.summaryRow;
+  if(!getCell(doc,'A'+lastRow)||!getCell(doc,'I'+(s+4)))throw Error('雛形のセル配置が想定と違うで');
+  writeCell(doc,'A1',String(submitMonth)+'月','text');
+  writeCell(doc,'G1',conf.header==='name'?'氏名':'社名','text');
+  writeCell(doc,'H1',conf.header==='name'?STAFF_PROFILES[employee].fullName:STAFF_PROFILES[employee].company,'text');
+  let work=0,over=0,night=0;
+  const timeRefs=[];
+  for(let i=0;i<conf.capacity;i++){
+   const row=i+3,r=rs[i];
+   for(const col of ['A','B','C','D','E','F']){
+    const ref=col+row;
+    if(!r){writeCell(doc,ref,'','text');continue}
+    let v='',kind='text';
+    if(col==='A'){v=(i>0&&rs[i-1].date===r.date)?'':dateSerial(r.date);kind=v===''?'text':'num'}
+    if(col==='B')v=r.site;
+    if(col==='C')v=r.person||'';
+    if(col==='D'){v=Number(r.start)/1440;kind='num';timeRefs.push(ref)}
+    if(col==='E'){v=Number(r.end)/1440;kind='num';timeRefs.push(ref)}
+    if(col==='F'){v=(Number(r.breakMin)||0)/1440;kind='num';timeRefs.push(ref)}
+    writeCell(doc,ref,v,kind);
+   }
+   if(!r){for(const col of ['G','H','I'])writeCell(doc,col+row,'','text');continue}
+   const start=Number(r.start),end=Number(r.end),breakMin=Number(r.breakMin)||0;
+   const duration=end-start-breakMin;
+   if(!Number.isFinite(duration)||duration<0)throw Error(employee+'の'+r.date+'の時刻・休憩が不正やで');
+   const overtime=Math.max(0,duration-540),nightMinutes=minutesNight(start,end);
+   work+=duration;over+=overtime;night+=nightMinutes;
+   writeCell(doc,'G'+row,duration/1440,'num',`IF(D${row}="","",E${row}-D${row}-F${row})`);
+   writeCell(doc,'H'+row,overtime?overtime/1440:'','num',`IF(OR(D${row}="",G${row}<=TIME(9,0,0)),"",G${row}-TIME(9,0,0))`);
+   const nightExpr=`MAX(0,MIN(E${row},5/24)-MAX(D${row},0))+MAX(0,MIN(E${row},29/24)-MAX(D${row},22/24))+MAX(0,MIN(E${row},53/24)-MAX(D${row},46/24))`;
+   writeCell(doc,'I'+row,nightMinutes?nightMinutes/1440:'','num',`IF(D${row}="","",${nightExpr})`);
+   timeRefs.push('G'+row,'H'+row,'I'+row);
+  }
+  writeCell(doc,'I'+s,(work-over)/1440,'num',`SUM(G3:G${lastRow})-SUM(H3:H${lastRow})`);
+  writeCell(doc,'I'+(s+1),over/1440,'num',`SUM(H3:H${lastRow})`);
+  writeCell(doc,'I'+(s+2),night/1440,'num',`SUM(I3:I${lastRow})`);
+  writeCell(doc,'I'+(s+3),workedDays.size,'num',`SUMPRODUCT((A3:A${lastRow}<>"")*(D3:D${lastRow}<>""))`);
+  // No "休み" rows. Summary is count of dates with no work record in 21st–20th period.
+  writeCell(doc,'I'+(s+4),holidays,'num');
+  setFormat(styles,doc,timeRefs);
+  setFormat(styles,doc,['I'+s,'I'+(s+1),'I'+(s+2)]);
+  zip.file(sheetPath,serial(doc));
+  zip.file('xl/styles.xml',serial(styles));
+  if(workbookEntry){
+   const wd=parse(await workbookEntry.async('text'));
+   let cp=x(wd,'calcPr')[0];if(!cp){cp=wd.createElementNS(NS_X,'calcPr');wd.documentElement.append(cp)}
+   cp.setAttribute('fullCalcOnLoad','1');cp.setAttribute('forceFullCalc','1');cp.setAttribute('calcMode','auto');
+   zip.file('xl/workbook.xml',serial(wd));
+  }
+  save(await zip.generateAsync({type:'blob',mimeType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}),`${closingFileDate()} ${employee}月報.xlsx`);
+  alert(employee+'の月報を出力したで。勤務 '+workedDays.size+'日（'+rs.length+'件）、休み '+holidays+'日。休みは日報未登録日から計算したので提出前に確認してな。');
+  showMonthlyBackupReminder();
+ }catch(e){alert('月報を出力できません：'+e.message)}
+}
+
 document.getElementById('wordActive').onclick=()=>word('active').catch(e=>alert('Word出力エラー：'+e.message));document.getElementById('wordClosed').onclick=()=>word('closed').catch(e=>alert('Word出力エラー：'+e.message));document.getElementById('excelExport').onclick=excel;
 })();
 
