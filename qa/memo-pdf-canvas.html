@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>日報アプリ 物件メモ QA</title>
+<style>html,body{margin:0;height:100%;font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#f4f7fa}#bar{box-sizing:border-box;background:#0e3b56;color:white;padding:9px 12px;font-size:13px;display:flex;justify-content:space-between;align-items:center;gap:6px}#bar button{padding:5px 10px;border:1px solid #a8d2e8;border-radius:6px;background:#fff;color:#0e3b56;font-weight:700}#frame{border:0;display:block;width:100%;height:calc(100dvh - 44px)}#error{padding:22px;line-height:1.8}</style></head><body>
+<div id="bar"><strong>物件メモ・PDF出力 Canvas方式 / QA テスト</strong><button id="reload" type="button">再読み込み</button></div>
+<div id="error" hidden></div><iframe id="frame" title="物件メモ・テスト用日報アプリ"></iframe>
+<script>
+'use strict';
+// This test harness uses existing qa/index.html as the baseline and does NOT touch production data.
+const modalCode = String.raw`
+function openSiteMemo(site){
+ const current=db.sites.find(x=>x.id===site.id);
+ if(!current){alert('この物件が見つからへんで。再読み込みしてな');return}
+ const shade=document.createElement('div');shade.setAttribute('role','presentation');
+ Object.assign(shade.style,{position:'fixed',inset:'0',zIndex:'99999',background:'rgba(0,0,0,.55)',display:'flex',alignItems:'center',justifyContent:'center',padding:'14px'});
+ const dialog=document.createElement('section');dialog.setAttribute('role','dialog');dialog.setAttribute('aria-modal','true');dialog.setAttribute('aria-label','物件メモ');
+ Object.assign(dialog.style,{boxSizing:'border-box',background:'#fff',borderRadius:'12px',width:'min(100%,640px)',maxHeight:'90dvh',overflow:'auto',padding:'20px',boxShadow:'0 14px 32px #0004',color:'#172b40'});
+ const h=document.createElement('h2');h.textContent='物件メモ';h.style.margin='0 0 8px';
+ const p=document.createElement('p');p.textContent=current.name;p.style.fontWeight='bold';p.style.overflowWrap='anywhere';
+ const desc=document.createElement('p');desc.textContent='工事を終了・保管してもメモは残るで。日報やWordには出力せず、JSONバックアップに保存される。';desc.style.fontSize='13px';
+ const area=document.createElement('textarea');area.value=typeof current.memo==='string'?current.memo:'';area.maxLength=10000;area.placeholder='例：残工事、注意事項、次回の申し送り、材料手配など';area.setAttribute('aria-label','物件メモ本文');
+ Object.assign(area.style,{boxSizing:'border-box',display:'block',width:'100%',minHeight:'190px',padding:'12px',border:'1px solid #aebdc9',borderRadius:'8px',font:'16px/1.6 -apple-system,BlinkMacSystemFont,sans-serif',resize:'vertical'});
+ const count=document.createElement('p');count.style.cssText='font-size:12px;text-align:right;color:#667;margin:6px 0';const updateCount=()=>count.textContent=area.value.length+' / 10000文字';area.addEventListener('input',updateCount);updateCount();
+ const row=document.createElement('div');row.style.cssText='display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap';
+ const make=(txt,color)=>{const b=document.createElement('button');b.type='button';b.textContent=txt;b.style.cssText='border:1px solid #aaa;border-radius:8px;padding:11px 15px;font-weight:bold;font-size:15px;cursor:pointer;background:'+color;return b};
+ const cancel=make('キャンセル','#f6f7f8'),save=make('メモを保存','#c9ebff'),pdf=make('📄 PDFに出力','#e4f4e5');
+ // Canvas rasterizes Japanese text using iPhone system fonts, avoiding HTML screenshot bugs.
+ const exportPdf=async()=>{
+  const memoText=area.value;
+  if(!memoText.trim()){alert('メモが空やで。内容を入力してからPDFに出力してな');return}
+  const original=pdf.textContent;pdf.disabled=true;pdf.textContent='PDFを作成中…';
+  try{
+   if(!window.jspdf || !window.jspdf.jsPDF){
+    await new Promise((resolve,reject)=>{
+     const script=document.createElement('script');
+     script.src='https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.2/jspdf.umd.min.js';
+     script.onload=resolve;script.onerror=()=>reject(Error('PDF作成ライブラリを読み込めへんかった。通信を確認してな'));
+     document.head.appendChild(script);
+    });
+   }
+   const {jsPDF}=window.jspdf;
+   const doc=new jsPDF({orientation:'portrait',unit:'mm',format:'a4',compress:true});
+   const W=1240,H=1754,LEFT=95,RIGHT=95,BOTTOM=95,TOP=100;
+   const canvas=document.createElement('canvas');canvas.width=W;canvas.height=H;
+   const ctx=canvas.getContext('2d',{alpha:false});
+   if(!ctx)throw Error('日本語描画用Canvasを作成できへんかった');
+   const font='-apple-system,BlinkMacSystemFont,"Hiragino Kaku Gothic ProN","Yu Gothic",sans-serif';
+   const bg=()=>{ctx.fillStyle='#ffffff';ctx.fillRect(0,0,W,H);ctx.fillStyle='#172b40';ctx.textBaseline='top'};
+   let page=1,y=TOP;
+   const setFont=(size,bold=false)=>{ctx.font=(bold?'bold ':'')+size+'px '+font};
+   const footer=()=>{setFont(21);ctx.fillStyle='#788391';ctx.textAlign='right';ctx.fillText(String(page),W-RIGHT,H-68);ctx.textAlign='left';ctx.fillStyle='#172b40'};
+   const appendPage=()=>{
+    footer();const data=canvas.toDataURL('image/jpeg',0.93);
+    if(page>1)doc.addPage();doc.addImage(data,'JPEG',0,0,210,297,undefined,'FAST');
+   };
+   const nextPage=()=>{appendPage();page++;bg();y=TOP};
+   const drawLine=(line,size=31,bold=false,color='#172b40',lineHeight=49)=>{
+    if(y+lineHeight>H-BOTTOM)nextPage();
+    setFont(size,bold);ctx.fillStyle=color;ctx.fillText(line||' ',LEFT,y);
+    y+=lineHeight;
+   };
+   const drawWrapped=(value,size=31,bold=false,color='#172b40',lineHeight=49)=>{
+    setFont(size,bold);
+    const maxWidth=W-LEFT-RIGHT;
+    for(const rawLine of String(value).replace(/\r\n?/g,'\n').split('\n')){
+     if(rawLine===''){drawLine(' ',size,bold,color,lineHeight);continue}
+     let current='';
+     for(const char of Array.from(rawLine)){
+      if(current&&ctx.measureText(current+char).width>maxWidth){drawLine(current,size,bold,color,lineHeight);current='';setFont(size,bold)}
+      current+=char;
+     }
+     if(current)drawLine(current,size,bold,color,lineHeight);
+    }
+   };
+   bg();
+   drawLine('物件メモ',49,true,'#0e3b56',77);
+   ctx.strokeStyle='#0e3b56';ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(LEFT,y);ctx.lineTo(W-RIGHT,y);ctx.stroke();y+=33;
+   drawLine('物件名',24,false,'#667588',39);
+   drawWrapped(current.name,35,true,'#172b40',53);y+=15;
+   drawLine('出力日：'+new Date().toLocaleDateString('ja-JP',{year:'numeric',month:'2-digit',day:'2-digit'}),24,false,'#667588',47);
+   y+=22;
+   if(y+60>H-BOTTOM)nextPage();
+   ctx.strokeStyle='#cbd6dc';ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(LEFT,y);ctx.lineTo(W-RIGHT,y);ctx.stroke();y+=38;
+   drawWrapped(memoText,31,false,'#172b40',52);
+   appendPage();
+   const filename='物件メモ_'+current.name.replace(/[\\/:*?"<>|\r\n]/g,'_').slice(0,55)+'_'+new Date().toLocaleDateString('sv-SE')+'.pdf';
+   doc.save(filename);
+  }catch(e){alert('PDFに出力できへんかった：'+e.message)}
+  finally{pdf.disabled=false;pdf.textContent=original}
+ };
+ pdf.onclick=exportPdf;
+ cancel.onclick=()=>shade.remove();
+ save.onclick=()=>{
+  const old=current.memo;current.memo=area.value;
+  if(persist()){shade.remove();renderLists();renderArchive();toast('物件メモを保存したで')}
+  else current.memo=old;
+ };
+ row.append(pdf,cancel,save);dialog.append(h,p,desc,area,count,row);shade.append(dialog);document.body.append(shade);
+ shade.addEventListener('click',e=>{if(e.target===shade)shade.remove()});
+ const onEscape=e=>{if(e.key==='Escape'){shade.remove();document.removeEventListener('keydown',onEscape)}};document.addEventListener('keydown',onEscape);
+ area.focus();
+}
+`;
+function patch(html){
+ const anchor='function renderArchive(){';
+ const activeAnchor="if(status==='active')acts.append(button(s.specNo?";
+ const activeInsert="acts.append(button(s.memo?'📝 メモあり':'📝 メモ',()=>openSiteMemo(s)));";
+ const archiveAnchor="item.append(actions);panel.append(item)}}";
+ if(!html.includes(anchor)||!html.includes(activeAnchor)||!html.includes(archiveAnchor))throw Error('QA版の構造が変更されているため、安全にメモ機能を組み込めません。');
+ html=html.replace(anchor,modalCode+'\n'+anchor);
+ html=html.replace(activeAnchor,activeInsert+activeAnchor);
+ html=html.replace(archiveAnchor,"actions.append(button(site.memo?'📝 メモあり':'📝 メモ',()=>openSiteMemo(site)));"+archiveAnchor);
+ html=html.replace(/Ver\.17\.3\.9 QA/g,'Ver.17.3.14 QA（メモPDF Canvas方式）');
+ html=html.replace(/Ver\.17\.3\.8 QA/g,'Ver.17.3.14 QA（メモPDF Canvas方式）');
+ html=html.replace(/<head>/i,'<head><base href="'+new URL('./',location.href).href+'">');
+ return html;
+}
+async function start(){
+ try{
+  const response=await fetch('./index.html?v=memo-test-17314-'+Date.now(),{cache:'no-store'});
+  if(!response.ok)throw Error('QA本体の取得に失敗したで（HTTP '+response.status+'）');
+  const source=await response.text();
+  const html=patch(source);
+  document.getElementById('frame').srcdoc=html;
+  document.getElementById('frame').hidden=false;
+  document.getElementById('error').hidden=true;
+ }catch(e){const error=document.getElementById('error');error.hidden=false;error.textContent='テスト版を起動できへんかった：'+e.message;document.getElementById('frame').hidden=true}
+}
+document.getElementById('reload').addEventListener('click',start);
+start();
+</script></body></html>
