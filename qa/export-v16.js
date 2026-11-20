@@ -73,18 +73,35 @@ function writeSpecificationNumber(row,site){
   setCellText(suffix,m[3]);
 }
 
-// Backward-compatible rich runs: the original work field remains plain text.
+// Rich color is carried in r.workRuns, with r.work retained as normal text for CSV/monthly exports.
+// Old records without formatting use plain black. Never silently drop valid red runs.
 function richWorkParagraph(cell,work,runs){
  const paragraph=tcParagraph(cell,'');
  const d=paragraph.ownerDocument;
- const valid=Array.isArray(runs)&&runs.length>0&&runs.length<3000&&runs.every(x=>x&&typeof x.text==='string'&&typeof x.red==='boolean')&&runs.map(x=>x.text).join('')===work;
- const segments=valid?runs:[{text:String(work||''),red:false}];
- // Leave paragraph formatting intact, replace only text runs.
+ const plain=String(work||'');
+ let segs=Array.isArray(runs)&&runs.length>0&&runs.length<3000&&runs.every(x=>x&&typeof x.text==='string'&&typeof x.red==='boolean')?runs.map(x=>({text:x.text,red:x.red})):null;
+ if(segs&&segs.map(x=>x.text).join('')!==plain){
+  // Legacy v17.3.8 records may include whitespace in runs, but plain work is trimmed.
+  const joined=segs.map(x=>x.text).join('');
+  if(joined.trim()===plain){
+   let lead=joined.length-joined.trimStart().length,tail=joined.length-joined.trimEnd().length;
+   for(const part of segs){const n=Math.min(lead,part.text.length);part.text=part.text.slice(n);lead-=n;}
+   for(let j=segs.length-1;j>=0;j--){const n=Math.min(tail,segs[j].text.length);segs[j].text=segs[j].text.slice(0,segs[j].text.length-n);tail-=n;}
+   segs=segs.filter(x=>x.text.length);
+  }else{
+   throw Error('作業内容の赤字情報が本文と一致しません：'+(plain.slice(0,22))+'。編集画面で保存し直してからWordを出力してな');
+  }
+ }
+ if(!segs||!segs.length)segs=[{text:plain,red:false}];
+ // Preserve paragraph metadata, but replace all existing runs.
  for(const node of [...paragraph.childNodes])if(node.nodeType===1&&node.localName==='r')paragraph.removeChild(node);
- for(const seg of segments){
-  const lines=seg.text.split('\n');
+ for(const seg of segs){
   const run=d.createElementNS(NS_W,'w:r');
-  if(seg.red){const pr=d.createElementNS(NS_W,'w:rPr'),color=d.createElementNS(NS_W,'w:color');color.setAttributeNS(NS_W,'w:val','FF0000');pr.appendChild(color);run.appendChild(pr)}
+  const pr=d.createElementNS(NS_W,'w:rPr');
+  const color=d.createElementNS(NS_W,'w:color');
+  color.setAttributeNS(NS_W,'w:val',seg.red?'FF0000':'000000');
+  pr.appendChild(color);run.appendChild(pr);
+  const lines=seg.text.split('\n');
   lines.forEach((line,i)=>{
    if(i){const br=d.createElementNS(NS_W,'w:br');run.appendChild(br)}
    if(line){const t=d.createElementNS(NS_W,'w:t');t.setAttribute('xml:space','preserve');t.textContent=line;run.appendChild(t)}

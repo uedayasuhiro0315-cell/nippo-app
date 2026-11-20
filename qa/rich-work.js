@@ -17,9 +17,14 @@ function runsFromDOM(){
   for(const child of el.childNodes)walk(child,isRed);
  }
  for(const node of editor.childNodes)walk(node,false);
- let text=pieces.map(x=>x.text).join('').replace(/\n+$/,'');
- // End-of-editor trailing newlines added by the browser are omitted, real line breaks inside are kept.
- if(text.length!==pieces.map(x=>x.text).join('').length){let drop=pieces.map(x=>x.text).join('').length-text.length;while(drop&&pieces.length){let x=pieces[pieces.length-1],n=Math.min(drop,x.text.length);x.text=x.text.slice(0,-n);drop-=n;if(!x.text)pieces.pop()}}
+ // Keep the plain work field and colored segments exactly equal, even with line breaks or spaces.
+ const raw=pieces.map(x=>x.text).join('');
+ const text=raw.trim();
+ let left=raw.length-raw.trimStart().length;
+ let right=raw.length-raw.trimEnd().length;
+ for(const part of pieces){const n=Math.min(left,part.text.length);part.text=part.text.slice(n);left-=n;}
+ for(let i=pieces.length-1;i>=0;i--){const n=Math.min(right,pieces[i].text.length);pieces[i].text=pieces[i].text.slice(0,pieces[i].text.length-n);right-=n;}
+ pieces=pieces.filter(x=>x.text.length);
  return {text,runs:pieces};
 }
 function refresh(){const v=runsFromDOM();hidden.value=v.text;label.textContent=currentRed?'赤字で入力':'黒字で入力';redBtn.dataset.active=String(currentRed);blackBtn.dataset.active=String(!currentRed)}
