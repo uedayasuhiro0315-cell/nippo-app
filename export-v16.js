@@ -72,8 +72,42 @@ function writeSpecificationNumber(row,site){
   if(m[2]!=='4100')setCellText(series,m[2]);
   setCellText(suffix,m[3]);
 }
+function richWorkParagraph(cell,work,runs){
+ const paragraph=tcParagraph(cell,'');
+ const d=paragraph.ownerDocument;
+ const plain=String(work||'');
+ let segs=Array.isArray(runs)&&runs.length>0&&runs.length<3000&&runs.every(x=>x&&typeof x.text==='string'&&typeof x.red==='boolean')?runs.map(x=>({text:x.text,red:x.red})):null;
+ if(segs&&segs.map(x=>x.text).join('')!==plain){
+  // Legacy v17.3.8 records may include whitespace in runs, but plain work is trimmed.
+  const joined=segs.map(x=>x.text).join('');
+  if(joined.trim()===plain){
+   let lead=joined.length-joined.trimStart().length,tail=joined.length-joined.trimEnd().length;
+   for(const part of segs){const n=Math.min(lead,part.text.length);part.text=part.text.slice(n);lead-=n;}
+   for(let j=segs.length-1;j>=0;j--){const n=Math.min(tail,segs[j].text.length);segs[j].text=segs[j].text.slice(0,segs[j].text.length-n);tail-=n;}
+   segs=segs.filter(x=>x.text.length);
+  }else{
+   throw Error('作業内容の赤字情報が本文と一致しません：'+(plain.slice(0,22))+'。編集画面で保存し直してからWordを出力してな');
+  }
+ }
+ if(!segs||!segs.length)segs=[{text:plain,red:false}];
+ // Preserve paragraph metadata, but replace all existing runs.
+ for(const node of [...paragraph.childNodes])if(node.nodeType===1&&node.localName==='r')paragraph.removeChild(node);
+ for(const seg of segs){
+  const run=d.createElementNS(NS_W,'w:r');
+  const pr=d.createElementNS(NS_W,'w:rPr');
+  const color=d.createElementNS(NS_W,'w:color');
+  color.setAttributeNS(NS_W,'w:val',seg.red?'FF0000':'000000');
+  pr.appendChild(color);run.appendChild(pr);
+  const lines=seg.text.split('\n');
+  lines.forEach((line,i)=>{
+   if(i){const br=d.createElementNS(NS_W,'w:br');run.appendChild(br)}
+   if(line){const t=d.createElementNS(NS_W,'w:t');t.setAttribute('xml:space','preserve');t.textContent=line;run.appendChild(t)}
+  });
+  paragraph.appendChild(run);
+ }
+}
 function renderPage(doc,section,site,rs,part,headerDate){const pars=children(section,'p'),tbl=children(section,'tbl')[0];assignParagraph(pars[1],`${headerDate}　№${part}`);assignParagraph(pars[2],'物件名：'+site.name);const trs=children(tbl,'tr');writeSpecificationNumber(trs[0],site);setCellText(tableCell(trs[0],6),site.person||rs[0].person||'');setCellText(tableCell(trs[0],8),selectedStaffProfile().fullName);
-  for(let i=0;i<10;i++){let r=rs[i],row=2+i*3;if(!r)continue;let d=new Date(r.date+'T12:00:00'),dw=['日','月','火','水','木','金','土'][d.getDay()];setCellText(tableCell(trs[row],0),String(d.getFullYear()-2018));setCellText(tableCell(trs[row],1),String(d.getMonth()+1));setCellText(tableCell(trs[row],2),String(d.getDate()));setCellText(tableCell(trs[row],3),dw);tcParagraph(tableCell(trs[row],4),r.work);let wp=tcParagraph(tableCell(trs[row+1],4),'');writeStaff(wp,workersForWord(r.workers).join('、')+(r.workers||[]).length+'人',`${time(r.start)}~${time(r.end)}`)}
+  for(let i=0;i<10;i++){let r=rs[i],row=2+i*3;if(!r)continue;let d=new Date(r.date+'T12:00:00'),dw=['日','月','火','水','木','金','土'][d.getDay()];setCellText(tableCell(trs[row],0),String(d.getFullYear()-2018));setCellText(tableCell(trs[row],1),String(d.getMonth()+1));setCellText(tableCell(trs[row],2),String(d.getDate()));setCellText(tableCell(trs[row],3),dw);richWorkParagraph(tableCell(trs[row],4),r.work,r.workRuns);let wp=tcParagraph(tableCell(trs[row+1],4),'');writeStaff(wp,workersForWord(r.workers).join('、')+(r.workers||[]).length+'人',`${time(r.start)}~${time(r.end)}`)}
 }
 async function word(status,onlySite=null){if(!ready())return;selectedStaffProfile();closingFileDate();const d=current(),sites=d.sites.filter(s=>s.status===status&&(!onlySite||s.id===onlySite)),all=d.records.filter(r=>sites.some(s=>s.id===r.siteId));if(!all.length){alert('対象の記録はまだないで');return}let res=await fetch('./word-template.docx',{cache:'no-store'});if(!res.ok)throw Error('Word雛形が見つかりません。word-template.docxをアップロードしてな');const zip=await JSZip.loadAsync(await res.arrayBuffer());const file=zip.file('word/document.xml');if(!file)throw Error('Word雛形の構造が違います');const doc=parse(await file.async('text')),body=q(doc,'body')[0],sect=children(body,'sectPr')[0],page=children(body,'p').slice(0,4).concat(children(body,'tbl').slice(0,1));if(page.length!==5||!sect)throw Error('Word雛形のページ構造が違います');let count=0;const pageMeta=pageMetaRead(),pendingMeta={...pageMeta};for(const s of sites){let rs=all.filter(r=>r.siteId===s.id).sort((a,b)=>a.date.localeCompare(b.date)||a.start-b.start);let blocks=[];for(const r of rs){let last=blocks[blocks.length-1];if(!last||last.length>=10){blocks.push([r])}else last.push(r)}for(let pageIdx=0;pageIdx<blocks.length;pageIdx++){const pageRecords=blocks[pageIdx];if(count){const sep=doc.createElementNS(NS_W,'w:p'),run=doc.createElementNS(NS_W,'w:r'),br=doc.createElementNS(NS_W,'w:br');br.setAttributeNS(NS_W,'w:type','page');run.append(br);sep.append(run);body.insertBefore(sep,sect)}const block=page.map(e=>e.cloneNode(true));for(const e of block)body.insertBefore(e,sect);const part=pageIdx+1,key=s.id+'::'+part,headerDate=pageHeader(pageMeta,s.id,part,pageRecords);
 pendingMeta[key]={date:headerDate,ids:pageRecords.map(r=>String(r.id))};
