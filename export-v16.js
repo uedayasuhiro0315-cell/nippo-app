@@ -59,18 +59,12 @@ function pageHeader(meta,site,part,rs){
   // Existing records on first installation: historical header dates cannot be recovered.
   return pageDateStr(rs[rs.length-1].date);
 }
-// Keep the template's preprinted KJ / 4100 intact for ordinary KJ4100 projects.
-// For an unlinked project, preserve the printed prefix and leave the suffix blank.
-// Exceptional prefixes (e.g. ML4100) must still print accurately.
+// 2026 template: the entire specification number is one merged Word table cell.
+// Write the saved number once, including its alphabetic prefix and all digits.
+// Never split it among logical columns of the same merged cell.
 function writeSpecificationNumber(row,site){
-  const full=String(site.specNo||'').trim().toUpperCase();
-  const prefix=tableCell(row,2),series=tableCell(row,3),suffix=tableCell(row,4);
-  if(!full){setCellText(suffix,'');return}
-  const m=/^([A-Z]+)(\d{4})([0-9A-Z-]+)$/.exec(full);
-  if(!m)throw Error('仕様書No.の形式を確認してな：'+site.name+' ('+full+')');
-  setCellText(prefix,m[1]);
-  setCellText(series,m[2]);
-  setCellText(suffix,m[3]);
+  const full=String(site.specNo||'').trim();
+  setCellText(tableCell(row,2),full);
 }
 
 // Rich color is carried in r.workRuns, with r.work retained as normal text for CSV/monthly exports.
