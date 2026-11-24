@@ -1,6 +1,7 @@
-// Ver.17.3.21 shared official specification master (read-only GitHub Pages).
+// Ver.17.3.22 Cloudflare shared specification master.
 (function(){
  'use strict';
+ const API='https://nippo-spec-api.ueda-yasuhiro-0315.workers.dev/specifications';
  const employee=document.getElementById('myEmployee');
  const box=document.getElementById('masterImportDetails');
  const active=document.getElementById('activeList');
@@ -15,8 +16,8 @@
  note.append(message,reload);
  active.parentNode.insertBefore(note,active);
  const guidance=document.createElement('p');guidance.className='muted';
- guidance.textContent='PDFから仕様書を登録したあと「共有用JSONを書き出す」を押して、GitHubのルート（nippo-app直下）にある shared-spec-master.json を上書きしてな。社員はアプリを開くだけで共有分を受け取れるで。';
- const exportBtn=document.createElement('button');exportBtn.className='btn full';exportBtn.type='button';exportBtn.textContent='🌐 共有用JSONを書き出す';exportBtn.style.margin='12px 0';
+ guidance.textContent='PDF登録後、クラウドへ共有してな。削除は端末内のみで、クラウドの削除には対応してへんで。';
+ const exportBtn=document.createElement('button');exportBtn.className='btn full';exportBtn.type='button';exportBtn.textContent='🌐 クラウドへ仕様書を共有';exportBtn.style.margin='12px 0';
  box.append(guidance,exportBtn);
  function syncAccess(){
   const ok=employee.value==='岡田';
@@ -25,25 +26,30 @@
   message.dataset.role=ok?'owner':'worker';
  }
  employee.addEventListener('change',syncAccess);syncAccess();
- function downloadText(text,name){
-  const blob=new Blob([text],{type:'application/json;charset=utf-8'});
-  const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=name;
-  document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),30000);
- }
- exportBtn.onclick=()=>{
-  if(employee.value!=='岡田'){alert('共有ファイルの作成は社員設定で岡田を選んだときだけやで');return}
+ exportBtn.onclick=async()=>{
+  if(employee.value!=='岡田')return;
   const items=masterNormalize(OFFICIAL_MASTER);
-  const v={schema:'nippo-shared-official-master-v1',updatedAt:new Date().toISOString(),items};
-  if(!confirm(items.length+'件の仕様書を共有するためのJSONを書き出すで。\n既存の仕様書を含めた全件を共有するで。よろしい？'))return;
-  downloadText(JSON.stringify(v,null,2)+'\n','shared-spec-master.json');
-  alert('共有用ファイルを書き出したで。GitHubの nippo-app 直下に shared-spec-master.json を上書きして、変更を確定してな。');
+  if(!items.length){alert('共有する仕様書がないで');return}
+  if(!confirm(items.length+'件をクラウドへ登録・更新するで。削除は行わへんで。よろしい？'))return;
+  const token=prompt('管理者用の秘密キーを入力してな');
+  if(!token)return;
+  exportBtn.disabled=true;
+  try{
+   const response=await fetch(API,{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},body:JSON.stringify({items})});
+   if(!response.ok)throw Error('HTTP '+response.status);
+   const result=await response.json();
+   if(result.status!=='ok')throw Error('登録結果を確認できません');
+   alert(result.processed+'件を処理したで');
+   await syncMaster();
+  }catch(e){alert('共有に失敗したで：'+e.message+'。端末内のデータはそのままやで。')}
+  finally{syncAccess()}
  };
  let lastTimestamp='';
  async function syncMaster(){
   message.textContent='共有仕様書を読み込み中…';reload.disabled=true;
   try{
-   const response=await fetch('./shared-spec-master.json?ts='+Date.now(),{cache:'no-store'});
-   if(response.status===404){message.textContent='共有マスターは未公開やで。岡田の端末でJSONを書き出して、GitHubへアップしてな。';return}
+   const response=await fetch(API,{cache:'no-store'});
+   if(response.status===404){message.textContent='共有APIが見つからへんで。';return}
    if(!response.ok)throw Error('HTTP '+response.status);
    if(Number(response.headers.get('content-length'))>1500000)throw Error('共有ファイルが大きすぎます');
    const raw=await response.text();if(raw.length>1500000)throw Error('共有ファイルが大きすぎます');
@@ -54,7 +60,8 @@
    const before=OFFICIAL_MASTER.length;
    // Shared master is additive: do not replace user-specific local rows, links, or work logs.
    // Existing local removals remain local; shared rows can be restored on refresh.
-   OFFICIAL_MASTER=masterNormalize([...OFFICIAL_MASTER,...cleaned]);
+   const merged=masterNormalize([...OFFICIAL_MASTER,...cleaned]);
+   if(!saveOfficialMaster(merged))throw Error('端末への保存に失敗しました');
    const added=OFFICIAL_MASTER.length-before;
    renderMasterDeleteList();
    lastTimestamp=String(payload.updatedAt||'');
