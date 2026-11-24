@@ -1,5 +1,8 @@
-【日報2026新雛形 QA版】
-GitHubの nippo-app/qa/ に index.html・word-template.docx・export-v16.js の3ファイルを上書きしてください。
-本番用（ルート直下）のファイルは触らないでください。
-QAで赤字、仕様書番号、物件名、1物件10件、日報2ページ以上、終了物件Word出力を確認してください。
-新雛形は元が3ページ＋空白1ページだったため、1ページ分をテンプレート化しています。
+QAテスト版：qa/ に spec-share-test.html と shared-spec-master.json を新規追加。
+GitHub Pagesから spec-share-test.html を開く。
+社員設定で「岡田」を選ぶと仕様書一覧PDF取込欄が表示される。
+PDF取込後、画面の「チェックした内容を登録」を実行し、「共有用JSONを書き出す」で shared-spec-master.json を取得。
+そのファイルをGitHubの qa/shared-spec-master.json に上書きして変更確定。
+他の社員は再読み込みすると共有仕様書を取得できる。
+注意：岡田選択は認証ではない。GitHubへのアップロードにはGitHubアカウントの権限が必要。
+注意：QA版は本番の個人端末データを参照しません。本番移行時は既存端末の仕様書を明示的に共有マスターへ統合します。

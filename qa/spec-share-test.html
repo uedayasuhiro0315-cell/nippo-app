@@ -1,0 +1,73 @@
+<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>共有仕様書 QA</title><style>body{margin:0;font-family:-apple-system,sans-serif;background:#eff5f8}header{background:#103e55;color:#fff;padding:9px 12px;display:flex;justify-content:space-between;align-items:center;font-size:14px}button{padding:7px;border:0;border-radius:6px}iframe{display:block;border:0;width:100%;height:calc(100dvh - 43px)}#error{padding:16px;white-space:pre-wrap}</style></head><body><header><strong>🌐 共有仕様書・QAテスト</strong><button id="retry">再読み込み</button></header><div id="error" hidden></div><iframe id="frame" title="共有仕様書QA"></iframe><script>
+'use strict';
+const patchCode = String.raw`
+(function(){
+ 'use strict';
+ const employee=document.getElementById('myEmployee');
+ const box=document.getElementById('masterImportDetails');
+ const active=document.getElementById('activeList');
+ if(!employee||!box||!active)throw Error('仕様書共有用の画面が見つかりません');
+ const note=document.createElement('div');
+ note.className='note';
+ note.style.margin='12px 0';
+ note.innerHTML='<strong>🌐 共有仕様書マスター（QA試験）</strong>';
+ const message=document.createElement('p');message.className='muted';message.textContent='共有仕様書を確認中…';
+ const reload=document.createElement('button');reload.type='button';reload.className='btn alt';reload.textContent='共有仕様書を再確認';
+ reload.style.marginBottom='5px';
+ note.append(message,reload);
+ active.parentNode.insertBefore(note,active);
+ const guidance=document.createElement('p');guidance.className='muted';
+ guidance.textContent='PDFから仕様書を登録したあと「共有用JSONを書き出す」を押して、GitHubの qa/shared-spec-master.json に上書きしてな。社員はアプリを開くだけで共有分を受け取れるで。';
+ const exportBtn=document.createElement('button');exportBtn.className='btn full';exportBtn.type='button';exportBtn.textContent='🌐 共有用JSONを書き出す';exportBtn.style.margin='12px 0';
+ box.append(guidance,exportBtn);
+ function syncAccess(){
+  const ok=employee.value==='岡田';
+  box.classList.toggle('hidden',!ok);
+  exportBtn.disabled=!ok;
+  message.dataset.role=ok?'owner':'worker';
+ }
+ employee.addEventListener('change',syncAccess);syncAccess();
+ function downloadText(text,name){
+  const blob=new Blob([text],{type:'application/json;charset=utf-8'});
+  const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=name;
+  document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),30000);
+ }
+ exportBtn.onclick=()=>{
+  if(employee.value!=='岡田'){alert('共有ファイルの作成は社員設定で岡田を選んだときだけやで');return}
+  const items=masterNormalize(OFFICIAL_MASTER);
+  const v={schema:'nippo-shared-official-master-v1',updatedAt:new Date().toISOString(),items};
+  if(!confirm(items.length+'件の仕様書を共有するためのJSONを書き出すで。\n既存の仕様書を含めた全件を共有するで。よろしい？'))return;
+  downloadText(JSON.stringify(v,null,2)+'\n','shared-spec-master.json');
+  alert('共有用ファイルを書き出したで。GitHubの qa フォルダに shared-spec-master.json を上書きして、変更を確定してな。');
+ };
+ let lastTimestamp='';
+ async function syncMaster(){
+  message.textContent='共有仕様書を読み込み中…';reload.disabled=true;
+  try{
+   const response=await fetch('./shared-spec-master.json?ts='+Date.now(),{cache:'no-store'});
+   if(response.status===404){message.textContent='共有マスターは未公開やで。岡田の端末でJSONを書き出して、GitHubへアップしてな。';return}
+   if(!response.ok)throw Error('HTTP '+response.status);
+   if(Number(response.headers.get('content-length'))>1500000)throw Error('共有ファイルが大きすぎます');
+   const raw=await response.text();if(raw.length>1500000)throw Error('共有ファイルが大きすぎます');
+   const payload=JSON.parse(raw);
+   if(payload?.schema!=='nippo-shared-official-master-v1'||!Array.isArray(payload.items)||payload.items.length>10000)throw Error('共有データの形式が違います');
+   const cleaned=masterNormalize(payload.items);
+   if(cleaned.length!==payload.items.length)throw Error('仕様書の番号・名前・重複を確認してな');
+   const before=OFFICIAL_MASTER.length;
+   // Shared master is additive: do not replace user-specific local rows, links, or work logs.
+   // Existing local removals remain local; shared rows can be restored on refresh.
+   OFFICIAL_MASTER=masterNormalize([...OFFICIAL_MASTER,...cleaned]);
+   const added=OFFICIAL_MASTER.length-before;
+   renderMasterDeleteList();
+   lastTimestamp=String(payload.updatedAt||'');
+   let when='';if(lastTimestamp){const d=new Date(lastTimestamp);if(!Number.isNaN(+d))when=' ／ 更新：'+d.toLocaleString('ja-JP')}
+   message.textContent='共有 '+cleaned.length+'件を確認、端末への新規追加 '+added+'件'+when+'。既存の日報とメモは変更してへんで。';
+  }catch(e){message.textContent='共有仕様書を取得できへんかった：'+e.message+'。端末内の登録分はそのまま使えるで。'}
+  finally{reload.disabled=false}
+ }
+ reload.addEventListener('click',syncMaster);
+ syncMaster();
+})();
+`;
+async function boot(){try{const r=await fetch('./index.html?specqa='+Date.now(),{cache:'no-store'});if(!r.ok)throw Error('QA本体が取得できません：HTTP '+r.status);let html=await r.text();const anchor='masterImportUI();renderMasterDeleteList();';if(!html.includes(anchor))throw Error('QAの仕様書画面構造が変更されました');if(!html.includes('qaStorage'))throw Error('QAのデータ分離が確認できません');html=html.replace(anchor,anchor+'\n'+patchCode);html=html.replace(/Ver\.17\.3\.17 QA/g,'Ver.17.3.20 QA（仕様書共有試験）');html=html.replace(/<head>/i,'<head><base href="'+new URL('./',location.href).href+'">');document.getElementById('frame').srcdoc=html;document.getElementById('error').hidden=true;}catch(e){const box=document.getElementById('error');box.hidden=false;box.textContent='起動できへんかった：'+e.message;document.getElementById('frame').hidden=true}}document.getElementById('retry').onclick=boot;boot();
+</script></body></html>
