@@ -191,6 +191,7 @@ async function excel(){
   const rs=d.records.filter(r=>r.date>=from&&r.date<=to&&Array.isArray(r.workers)&&r.workers.includes(employee))
     .sort((a,b)=>a.date.localeCompare(b.date)||Number(a.start)-Number(b.start));
   if(rs.length>conf.capacity)throw Error(employee+'の勤務記録が'+rs.length+'件あるで。新雛形の'+conf.capacity+'行を超えるため出力できへん');
+  const unknown=rs.filter(r=>r.breakMin==null).length; if(unknown)alert('休憩未確認が'+unknown+'件あります。休憩欄は空欄、実働・残業は休憩0分の仮計算です。Excelで修正してから提出してな。');
   const days=countPeriodDates(from,to),workedDays=new Set(rs.map(r=>r.date));
   const holidays=days-workedDays.size;
   if(!confirm(employee+'の'+from+'〜'+to+'の月報を出力するで。\n勤務 '+workedDays.size+'日（'+rs.length+'件）／ 日報記録なし '+holidays+'日を「休み」に集計する。\n※入力漏れや別端末の作業記録も休みとして数えるから、提出前に確認してな。続ける？'))return;
@@ -213,7 +214,7 @@ async function excel(){
     if(col==='C')v=r.person||'';
     if(col==='D'){v=Number(r.start)/1440;kind='num';timeRefs.push(ref)}
     if(col==='E'){v=Number(r.end)/1440;kind='num';timeRefs.push(ref)}
-    if(col==='F'){v=(Number(r.breakMin)||0)/1440;kind='num';timeRefs.push(ref)}
+    if(col==='F'){v=r.breakMin==null?'':Number(r.breakMin)/1440;kind=r.breakMin==null?'text':'num';timeRefs.push(ref)}
     writeCell(doc,ref,v,kind);
    }
    if(!r){for(const col of ['G','H','I'])writeCell(doc,col+row,'','text');continue}
